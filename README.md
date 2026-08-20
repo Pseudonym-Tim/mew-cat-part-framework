@@ -7,6 +7,8 @@ A DLL dependency mod that allows other mods to add their own custom non-conflict
 
 # Making a Custom Cat Part Mod
 
+NOTE: A "cat_parts_test" FLA file demonstrating multiple cat part/texture additions is included in the root directory of this repo, feel free to download it and use it as an example!
+
 To make a cat part mod, install **MewCatPartFramework**, then create your own mod folder next to it.
 
 First, make sure your `description.json` lists the framework as a dependency so players know to install it:
