@@ -1,0 +1,5 @@
+LIBRARY MewCatPartFramework
+EXPORTS
+    MewCatPartFramework_Init
+    MewCatPartFramework_ResolvePart
+    MewCatPartFramework_SyncTextureClip

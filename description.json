@@ -1,0 +1,7 @@
+{
+  "title": "MewCatPartFramework",
+  "description": "Dependency that allows other mods to add their own custom non-conflicting cat parts!",
+  "author": "Pseudonym_Tim",
+  "version": "1.0.0",
+  "requirements": []
+}
