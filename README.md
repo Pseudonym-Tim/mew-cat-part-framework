@@ -5,7 +5,7 @@ A DLL dependency mod that allows other mods to add their own custom non-conflict
 
 > **Current support:** This framework currently only applies to **cat body parts and cat textures**. Other moddable content such as items is **not supported yet**, but support for additional content types is planned soon.
 
-## Making a Custom Cat Part Mod
+# Making a Custom Cat Part Mod
 
 To make a cat part mod, install **MewCatPartFramework**, then create your own mod folder next to it.
 
@@ -125,7 +125,7 @@ MyCustomCat {
 }
 ```
 
-### Other Notes
+## Other Notes
 
 Due to an accidental mismatch in the original cat assets, (at the time of writing at least), the **Head texture timeline is 1505 frames long**, while the other texture timelines are **1506 frames long**.
 MewCatPartFramework detects and corrects this mismatch automatically when custom textures are appended. **Do not add an empty padding frame yourself.** Manual padding will interfere with the framework's alignment handling.
