@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef void* (__fastcall *fn_find_swf_export)(void* application, const void* name);
+typedef void* (__fastcall *fn_find_swf_export)(void* application, void* name);
 typedef void* (__fastcall *fn_find_swf_character)(void* characterTable, int32_t characterId);
 typedef void (__fastcall *fn_append_movie_clip)(void* destination, void* source);
 typedef void* (__fastcall *fn_gon_index_by_name)(void* gonObject, const void* fieldName);
@@ -32,8 +32,14 @@ typedef struct
     char batch[MAX_ID_LENGTH];
     char target[MAX_TARGET_LENGTH];
     int32_t baseFrame;
+    int32_t effectiveBaseFrame;
     int32_t appendedFrames;
     int32_t duplicate;
+    int32_t committed;
+    int32_t alignmentState;
+    void* destination;
+    void* source;
+    void* paddingCharacter;
 } BatchTarget;
 
 typedef struct
@@ -42,6 +48,7 @@ typedef struct
     int recordBatch;
     int textureTargetIndex;
     void* destination;
+    void* paddingCharacter;
     char batch[MAX_ID_LENGTH];
     char target[MAX_TARGET_LENGTH];
 } PendingAppend;
@@ -49,6 +56,7 @@ typedef struct
 typedef struct
 {
     void* source;
+    int32_t frameCount;
 } TextureAppendSource;
 
 #define TEXTURE_SYNC_CACHE_SLOTS 256
@@ -71,18 +79,8 @@ typedef struct
     void* field;
     char id[MAX_ID_LENGTH];
     char kind[16];
+    char selector[24];
 } PendingNamedField;
-
-typedef struct
-{
-    union
-    {
-        char small[16];
-        const char* pointer;
-    } data;
-    size_t size;
-    size_t capacity;
-} BorrowedMsvcString;
 
 typedef struct
 {
@@ -100,6 +98,8 @@ static const char* const LEG_TARGETS[] = {"CatLeg"};
 static const char* const TAIL_TARGETS[] = {"CatTail"};
 static const char* const EAR_TARGETS[] = {"CatEar"};
 static const char* const EYE_TARGETS[] = {"CatEye", "CatEye_Right", "CatEyeClosed", "CatEyeClosed_Right"};
+static const char* const LEFT_EYE_TARGETS[] = {"CatEye", "CatEyeClosed"};
+static const char* const RIGHT_EYE_TARGETS[] = {"CatEye_Right", "CatEyeClosed_Right"};
 static const char* const EYEBROW_TARGETS[] = {"CatEyebrow"};
 static const char* const MOUTH_TARGETS[] = {"CatMouth", "CatMouthOpen", "CatMouthSmile"};
 static const char* const TEXTURE_TARGETS[] = {
@@ -152,6 +152,7 @@ static __declspec(thread) PendingAppend g_pendingAppend;
 static __declspec(thread) int32_t g_insideBindingWork;
 
 static void RetryPendingNamedFields(void);
+static int SwfFindExportCharacterId(void* swf, const char* exportName, int32_t* characterId);
 
 static void Log(const char* format, ...)
 {
@@ -313,23 +314,52 @@ static int MsvcStringEquals(const void* stringObject, const char* literal)
     return GetMsvcStringView(stringObject, &text, &length) && length == literalLength && memcmp(text, literal, length) == 0;
 }
 
-static void MakeBorrowedMsvcString(BorrowedMsvcString* value, const char* text)
+/*
+* For strings longer than 15 bytes the destructor will free the pointer.
+* Instead, rewrite the already-owned caller temporary in place and forward
+* that same object exactly once to the original function...
+*/
+static int RewriteMsvcStringInPlace(void* stringObject, const char* replacement)
 {
-    size_t length = strlen(text);
+    uint8_t* bytes = (uint8_t*)stringObject;
+    char* data;
+    size_t size;
+    size_t capacity;
+    size_t replacementLength;
 
-    memset(value, 0, sizeof(*value));
-    value->size = length;
-
-    if (length <= MSVC_STRING_SSO_CAPACITY)
+    if (!bytes || !replacement || !IsMemoryRangeAccessible(bytes, MSVC_STRING_CAPACITY_OFFSET + sizeof(capacity), 1))
     {
-        memcpy(value->data.small, text, length + 1U);
-        value->capacity = MSVC_STRING_SSO_CAPACITY;
+        return 0;
+    }
+
+    memcpy(&size, bytes + MSVC_STRING_SIZE_OFFSET, sizeof(size));
+    memcpy(&capacity, bytes + MSVC_STRING_CAPACITY_OFFSET, sizeof(capacity));
+    replacementLength = strlen(replacement);
+
+    if (size > MAX_GON_STRING_LENGTH || capacity < size || replacementLength > capacity)
+    {
+        return 0;
+    }
+
+    if (capacity <= MSVC_STRING_SSO_CAPACITY)
+    {
+        data = (char*)bytes;
     }
     else
     {
-        value->data.pointer = text;
-        value->capacity = length;
+        memcpy(&data, bytes, sizeof(data));
     }
+
+    if (!data || !IsMemoryRangeAccessible(data, replacementLength + 1U, 1))
+    {
+        return 0;
+    }
+
+    memmove(data, replacement, replacementLength);
+    data[replacementLength] = '\0';
+    memcpy(bytes + MSVC_STRING_SIZE_OFFSET, &replacementLength, sizeof(replacementLength));
+
+    return 1;
 }
 
 static const char* CanonicalKind(const char* kind)
@@ -353,10 +383,15 @@ static int StringViewEqualsLiteral(const char* text, size_t length, const char* 
     return length == literalLength && memcmp(text, literal, length) == 0;
 }
 
-static const char* KindForGonField(const void* fieldName)
+static const char* KindForGonField(const void* fieldName, const char** selector)
 {
     const char* text;
     size_t length;
+
+    if (selector)
+    {
+        *selector = NULL;
+    }
 
     /*
     * This hook sits on a global engine GON lookup. Read
@@ -367,15 +402,30 @@ static const char* KindForGonField(const void* fieldName)
         return NULL;
     }
 
-    if (StringViewEqualsLiteral(text, length, "body")) return "body";
-    if (StringViewEqualsLiteral(text, length, "head")) return "head";
-    if (StringViewEqualsLiteral(text, length, "tail")) return "tail";
-    if (StringViewEqualsLiteral(text, length, "leg1") || StringViewEqualsLiteral(text, length, "leg2") || StringViewEqualsLiteral(text, length, "arm1") || StringViewEqualsLiteral(text, length, "arm2")) return "leg";
-    if (StringViewEqualsLiteral(text, length, "lefteye") || StringViewEqualsLiteral(text, length, "righteye")) return "eye";
-    if (StringViewEqualsLiteral(text, length, "lefteyebrow") || StringViewEqualsLiteral(text, length, "righteyebrow")) return "eyebrow";
-    if (StringViewEqualsLiteral(text, length, "leftear") || StringViewEqualsLiteral(text, length, "rightear")) return "ear";
-    if (StringViewEqualsLiteral(text, length, "mouth")) return "mouth";
-    if (StringViewEqualsLiteral(text, length, "texture")) return "texture";
+#define MATCH_GON_FIELD(nameLiteral, kindLiteral) \
+    if (StringViewEqualsLiteral(text, length, nameLiteral)) \
+    { \
+        if (selector) *selector = nameLiteral; \
+        return kindLiteral; \
+    }
+
+    MATCH_GON_FIELD("body", "body");
+    MATCH_GON_FIELD("head", "head");
+    MATCH_GON_FIELD("tail", "tail");
+    MATCH_GON_FIELD("leg1", "leg");
+    MATCH_GON_FIELD("leg2", "leg");
+    MATCH_GON_FIELD("arm1", "leg");
+    MATCH_GON_FIELD("arm2", "leg");
+    MATCH_GON_FIELD("lefteye", "eye");
+    MATCH_GON_FIELD("righteye", "eye");
+    MATCH_GON_FIELD("lefteyebrow", "eyebrow");
+    MATCH_GON_FIELD("righteyebrow", "eyebrow");
+    MATCH_GON_FIELD("leftear", "ear");
+    MATCH_GON_FIELD("rightear", "ear");
+    MATCH_GON_FIELD("mouth", "mouth");
+    MATCH_GON_FIELD("texture", "texture");
+
+#undef MATCH_GON_FIELD
 
     return NULL;
 }
@@ -418,6 +468,28 @@ static void GetRequiredTargets(const char* kind, const char* const** targets, in
     {
         *targets = TEXTURE_TARGETS; *targetCount = 5;
     }
+}
+
+static void GetRequiredTargetsForSelector(const char* kind, const char* selector, const char* const** targets, int32_t* targetCount)
+{
+    if (strcmp(kind, "eye") == 0 && selector)
+    {
+        if (_stricmp(selector, "lefteye") == 0)
+        {
+            *targets = LEFT_EYE_TARGETS;
+            *targetCount = 2;
+            return;
+        }
+
+        if (_stricmp(selector, "righteye") == 0)
+        {
+            *targets = RIGHT_EYE_TARGETS;
+            *targetCount = 2;
+            return;
+        }
+    }
+
+    GetRequiredTargets(kind, targets, targetCount);
 }
 
 static int ParseManifestLine(char* line, const char* sourcePath, int32_t lineNumber)
@@ -863,12 +935,12 @@ static int AppendToMovieClipData(void* destinationData, void* source)
     return 1;
 }
 
-static void RecordTextureAppendSource(int textureTargetIndex, void* source)
+static void RecordTextureAppendSource(int textureTargetIndex, void* source, int32_t frameCount)
 {
     int32_t sourceIndex;
     TextureAppendSource* added;
 
-    if (textureTargetIndex < 0 || textureTargetIndex >= 5 || !source)
+    if (textureTargetIndex < 0 || textureTargetIndex >= 5 || !source || frameCount < 1)
     {
         return;
     }
@@ -885,6 +957,7 @@ static void RecordTextureAppendSource(int textureTargetIndex, void* source)
 
     added = &g_textureAppendSources[textureTargetIndex][sourceIndex];
     added->source = source;
+    added->frameCount = frameCount;
     g_textureAppendSourceCounts[textureTargetIndex] = sourceIndex + 1;
     LeaveCriticalSection(&g_textureAlignmentLock);
 }
@@ -1078,23 +1151,12 @@ static int SwfFindExportCharacterId(void* swf, const char* exportName, int32_t* 
 static void* FindHiddenTextureDestination(void* application, const TextureTargetDefinition* definition)
 {
     uint8_t* bytes = (uint8_t*)application;
-    BorrowedMsvcString parentName;
-    void* expectedParent;
     void** swfs;
     int32_t swfCount;
     int32_t index;
 
     if (!application || !definition || !g_findSwfCharacter || !IsMemoryRangeAccessible(bytes + APPLICATION_SWF_COUNT_OFFSET, APPLICATION_SWF_ARRAY_OFFSET - APPLICATION_SWF_COUNT_OFFSET + sizeof(swfs), 0))
     {
-        return NULL;
-    }
-
-    MakeBorrowedMsvcString(&parentName, definition->parentExport);
-    expectedParent = g_origFindSwfExport ? g_origFindSwfExport(application, &parentName) : NULL;
-    
-    if (!expectedParent)
-    {
-        Log("Cannot route %s: exported parent %s is unavailable", definition->target, definition->parentExport);
         return NULL;
     }
 
@@ -1121,8 +1183,8 @@ static void* FindHiddenTextureDestination(void* application, const TextureTarget
         }
 
         candidateParent = g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, parentCharacterId);
-        
-        if (candidateParent != expectedParent)
+
+        if (!candidateParent)
         {
             continue;
         }
@@ -1169,7 +1231,7 @@ static BatchTarget* FindBatchTarget(const char* batch, const char* target)
     return NULL;
 }
 
-static void RecordBatchTarget(const char* batch, const char* target, int32_t baseFrame, int32_t appendedFrames)
+static void RecordBatchTarget(const char* batch, const char* target, int32_t baseFrame, int32_t appendedFrames, void* destination, void* source, void* paddingCharacter)
 {
     BatchTarget* existing;
     BatchTarget* added;
@@ -1197,14 +1259,252 @@ static void RecordBatchTarget(const char* batch, const char* target, int32_t bas
     snprintf(added->batch, sizeof(added->batch), "%s", batch);
     snprintf(added->target, sizeof(added->target), "%s", target);
     added->baseFrame = baseFrame;
+    added->effectiveBaseFrame = baseFrame;
     added->appendedFrames = appendedFrames;
+    added->destination = destination;
+    added->source = source;
+    added->paddingCharacter = paddingCharacter;
     Log("Bound batch %s / %s to frames %d..%d", batch, target, baseFrame + 1, baseFrame + appendedFrames);
     LeaveCriticalSection(&g_registryLock);
 }
 
-static void* __fastcall HookFindSwfExport(void* application, const void* name)
+static void MarkBatchTargetCommitted(const char* batch, const char* target)
 {
-    BorrowedMsvcString baseName;
+    BatchTarget* mapping;
+
+    EnterCriticalSection(&g_registryLock);
+    mapping = FindBatchTarget(batch, target);
+
+    if (mapping && !mapping->duplicate)
+    {
+        mapping->committed = 1;
+    }
+
+    LeaveCriticalSection(&g_registryLock);
+}
+
+static void* FindOwningSwfForExport(void* application, const char* exportName, void* expectedExport)
+{
+    uint8_t* bytes = (uint8_t*)application;
+    void** swfs;
+    int32_t swfCount;
+    int32_t index;
+
+    if (!application || !exportName || !expectedExport || !g_findSwfCharacter || !IsMemoryRangeAccessible(bytes + APPLICATION_SWF_COUNT_OFFSET, APPLICATION_SWF_ARRAY_OFFSET - APPLICATION_SWF_COUNT_OFFSET + sizeof(swfs), 0))
+    {
+        return NULL;
+    }
+
+    memcpy(&swfCount, bytes + APPLICATION_SWF_COUNT_OFFSET, sizeof(swfCount));
+    memcpy(&swfs, bytes + APPLICATION_SWF_ARRAY_OFFSET, sizeof(swfs));
+
+    if (swfCount <= 0 || swfCount > MAX_APPLICATION_SWFS || !swfs || !IsMemoryRangeAccessible(swfs, (size_t)swfCount * sizeof(*swfs), 0))
+    {
+        return NULL;
+    }
+
+    for (index = swfCount - 1; index >= 0; --index)
+    {
+        void* swf = swfs[index];
+        int32_t characterId;
+        void* candidate;
+
+        if (!SwfFindExportCharacterId(swf, exportName, &characterId))
+        {
+            continue;
+        }
+
+        candidate = g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, characterId);
+
+        if (candidate == expectedExport)
+        {
+            return swf;
+        }
+    }
+
+    return NULL;
+}
+
+static void* FindExportInSwf(void* swf, const char* exportName)
+{
+    int32_t characterId;
+
+    if (!swf || !exportName || !g_findSwfCharacter || !SwfFindExportCharacterId(swf, exportName, &characterId))
+    {
+        return NULL;
+    }
+
+    return g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, characterId);
+}
+
+static void* FindPaddingCharacterInSwf(void* swf)
+{
+    void* filler;
+
+    if (!swf || !g_findSwfCharacter)
+    {
+        return NULL;
+    }
+
+    filler = g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, CAT_TEXTURE_PADDING_CHARACTER_ID);
+
+    if (!filler || MovieClipFrameCount(filler) != 1)
+    {
+        return NULL;
+    }
+
+    return filler;
+}
+
+static int BatchAlreadyHasAnyTarget(const char* batch, const char* const* targets, int32_t targetCount)
+{
+    int32_t index;
+    int found = 0;
+
+    EnterCriticalSection(&g_registryLock);
+
+    for (index = 0; index < targetCount; ++index)
+    {
+        if (FindBatchTarget(batch, targets[index]))
+        {
+            found = 1;
+            break;
+        }
+    }
+
+    LeaveCriticalSection(&g_registryLock);
+    return found;
+}
+
+/*
+* Align related vanilla destination timelines BEFORE the game's append for a
+* named batch. This is the point at which Mewgenics itself is about to call
+* append_movie_clip, mutating a destination here is supported by the same
+* routine and does not replay an already-consumed custom source...
+*
+* The first target from a batch/group performs base alignment. Once one
+* mapping for that group has been recorded, every later target in the same
+* batch skips this step so custom source frames are not mistaken for padding...
+*/
+static int AlignTargetGroupBeforeFirstBatchAppend(
+    void* application,
+    const char* batch,
+    const char* const* targets,
+    int32_t targetCount,
+    const char* groupName,
+    const char* anchorTarget,
+    void* anchorDestination)
+{
+    void* destinations[5];
+    void* ownerSwf;
+    void* filler = NULL;
+    int32_t frames[5];
+    int32_t index;
+    int32_t canonicalBase = -1;
+
+    if (!application || !batch || !targets || targetCount < 2 || targetCount > 5 ||
+        !groupName || !anchorTarget || !anchorDestination || !g_origAppendMovieClip)
+    {
+        return 0;
+    }
+
+    if (BatchAlreadyHasAnyTarget(batch, targets, targetCount))
+    {
+        return 1;
+    }
+
+    /*
+    * The native lookup already selected the correct destination. Use that
+    * object only to identify its owning SWF, then resolve every sibling. 
+    * A global newest-first search can pick a similarly named
+    * custom source export and misinterpret a non-destination object as a
+    * fucking MovieClip definition...
+    */
+    ownerSwf = FindOwningSwfForExport(application, anchorTarget, anchorDestination);
+
+    if (!ownerSwf)
+    {
+        Log("Cannot pre-align batch %s / %s: native destination %s has no owning SWF", batch, groupName, anchorTarget);
+        return 0;
+    }
+
+    for (index = 0; index < targetCount; ++index)
+    {
+        destinations[index] = FindExportInSwf(ownerSwf, targets[index]);
+        frames[index] = MovieClipFrameCount(destinations[index]);
+
+        if (!destinations[index] || frames[index] < 1 || frames[index] > 100000)
+        {
+            Log("Cannot pre-align batch %s / %s: destination %s in owner SWF has invalid frame count %d", batch, groupName, targets[index], frames[index]);
+            return 0;
+        }
+
+        if (frames[index] > canonicalBase)
+        {
+            canonicalBase = frames[index];
+        }
+    }
+
+    for (index = 0; index < targetCount; ++index)
+    {
+        int32_t paddingFrames = canonicalBase - frames[index];
+        int32_t paddingIndex;
+
+        if (paddingFrames <= 0)
+        {
+            continue;
+        }
+
+        if (!filler)
+        {
+            filler = FindPaddingCharacterInSwf(ownerSwf);
+
+            if (!filler)
+            {
+                Log("Cannot pre-align batch %s / %s: owner SWF has no safe one-frame filler character %d", batch, groupName, CAT_TEXTURE_PADDING_CHARACTER_ID);
+                return 0;
+            }
+        }
+
+        for (paddingIndex = 0; paddingIndex < paddingFrames; ++paddingIndex)
+        {
+            g_origAppendMovieClip(destinations[index], filler);
+        }
+
+        if (MovieClipFrameCount(destinations[index]) != canonicalBase)
+        {
+            Log("Cannot pre-align batch %s / %s: %s stopped at frame %d instead of %d", batch, groupName, targets[index], MovieClipFrameCount(destinations[index]), canonicalBase);
+            return 0;
+        }
+    }
+
+    Log("Pre-aligned batch %s / %s base timelines at frame %d", batch, groupName, canonicalBase);
+
+    return 1;
+}
+
+static int AlignNamedTargetBeforeAppend(void* application, const char* batch, const char* target, void* nativeDestination)
+{
+    if (_stricmp(target, "CatEye") == 0 || _stricmp(target, "CatEyeClosed") == 0)
+    {
+        return AlignTargetGroupBeforeFirstBatchAppend(application, batch, LEFT_EYE_TARGETS, 2, "left eye", target, nativeDestination);
+    }
+
+    if (_stricmp(target, "CatEye_Right") == 0 || _stricmp(target, "CatEyeClosed_Right") == 0)
+    {
+        return AlignTargetGroupBeforeFirstBatchAppend(application, batch, RIGHT_EYE_TARGETS, 2, "right eye", target, nativeDestination);
+    }
+
+    if (_stricmp(target, "CatMouth") == 0 || _stricmp(target, "CatMouthOpen") == 0 || _stricmp(target, "CatMouthSmile") == 0)
+    {
+        return AlignTargetGroupBeforeFirstBatchAppend(application, batch, MOUTH_TARGETS, 3, "mouth", target, nativeDestination);
+    }
+
+    return 1;
+}
+
+static void* __fastcall HookFindSwfExport(void* application, void* name)
+{
     char target[MAX_TARGET_LENGTH];
     char batch[MAX_ID_LENGTH];
     const TextureTargetDefinition* textureTarget;
@@ -1217,8 +1517,25 @@ static void* __fastcall HookFindSwfExport(void* application, const void* name)
     {
         textureTarget = FindTextureTargetDefinition(target);
 
+        /*
+        * The incoming name is a real caller-owned std::string temporary...
+        * Shorten that same object and forward it to the original function so
+        * we destroy exactly the allocation the caller created...
+        */
+        if (!RewriteMsvcStringInPlace(name, target))
+        {
+            Log("Cannot rewrite annotated append target %s without violating std::string ownership", target);
+            return g_origFindSwfExport ? g_origFindSwfExport(application, name) : NULL;
+        }
+
         if (textureTarget)
         {
+            // Consume/destroy the string through native caller...
+            if (g_origFindSwfExport)
+            {
+                (void)g_origFindSwfExport(application, name);
+            }
+
             result = FindHiddenTextureDestination(application, textureTarget);
 
             if (result)
@@ -1234,8 +1551,18 @@ static void* __fastcall HookFindSwfExport(void* application, const void* name)
             return result;
         }
 
-        MakeBorrowedMsvcString(&baseName, target);
-        result = g_origFindSwfExport ? g_origFindSwfExport(application, &baseName) : NULL;
+        /*
+        * Let the native lookup choose the real destination first. We are
+        * still before append_movie_clip, so it is safe to normalize sibling
+        * timelines now, and anchoring on this result keeps every sibling
+        * lookup inside the same owning SWF...
+        */
+        result = g_origFindSwfExport ? g_origFindSwfExport(application, name) : NULL;
+
+        if (result && !AlignNamedTargetBeforeAppend(application, batch, target, result))
+        {
+            Log("Named append %s / %s will continue without group alignment", batch, target);
+        }
 
         if (result)
         {
@@ -1250,15 +1577,20 @@ static void* __fastcall HookFindSwfExport(void* application, const void* name)
     }
 
     /*
-    * Plain synthetic names intentionally work without __MCPF__. This makes
-    * _Append_CatBodyTexture/_Append_CatHeadTexture/etc. behave like
-    * native append targets for authors who want to use numeric texture IDs
-    * and otherwise stay entirely within the game's stock merge flow...
+    * Plain synthetic texture targets still arrive as by-value std::string
+    * temporaries. Detect the target first, then forward the same object to
+    * the original lookup once so its destructor runs before routing to the
+    * hidden vanilla texture timeline...
     */
     textureTarget = FindTextureTargetDefinitionFromName(name);
 
     if (textureTarget)
     {
+        if (g_origFindSwfExport)
+        {
+            (void)g_origFindSwfExport(application, name);
+        }
+
         result = FindHiddenTextureDestination(application, textureTarget);
 
         if (result)
@@ -1273,6 +1605,7 @@ static void* __fastcall HookFindSwfExport(void* application, const void* name)
         return result;
     }
 
+    // Original function consumes the string...
     return g_origFindSwfExport ? g_origFindSwfExport(application, name) : NULL;
 }
 
@@ -1301,7 +1634,7 @@ static void __fastcall HookAppendMovieClip(void* destination, void* source)
     */
     if (baseFrame >= 0 && appendedFrames > 0 && pending.textureTargetIndex >= 0)
     {
-        RecordTextureAppendSource(pending.textureTargetIndex, source);
+        RecordTextureAppendSource(pending.textureTargetIndex, source, appendedFrames);
     }
 
     /*
@@ -1314,7 +1647,7 @@ static void __fastcall HookAppendMovieClip(void* destination, void* source)
     {
         InterlockedIncrement(&g_activeAnnotatedAppends);
         ++g_insideBindingWork;
-        RecordBatchTarget(pending.batch, pending.target, baseFrame, appendedFrames);
+        RecordBatchTarget(pending.batch, pending.target, baseFrame, appendedFrames, destination, source, pending.paddingCharacter);
     }
 
     if (g_origAppendMovieClip)
@@ -1324,6 +1657,7 @@ static void __fastcall HookAppendMovieClip(void* destination, void* source)
 
     if (recordBatch && baseFrame >= 0 && appendedFrames > 0)
     {
+        MarkBatchTargetCommitted(pending.batch, pending.target);
         --g_insideBindingWork;
 
         if (InterlockedDecrement(&g_activeAnnotatedAppends) == 0 && InterlockedCompareExchange(&g_activeAnimationMerges, 0, 0) == 0)
@@ -1399,7 +1733,7 @@ static PartDefinition* FindPart(const char* id)
     return NULL;
 }
 
-static int ResolvePartFrame(const PartDefinition* part, int32_t* resolvedFrame)
+static int ResolvePartFrameForSelector(const PartDefinition* part, const char* selector, int32_t* resolvedFrame)
 {
     const char* const* requiredTargets;
     int32_t requiredTargetCount;
@@ -1408,15 +1742,20 @@ static int ResolvePartFrame(const PartDefinition* part, int32_t* resolvedFrame)
     int32_t sharedLastFrame = INT32_MAX;
     int64_t resolved;
 
-    GetRequiredTargets(part->kind, &requiredTargets, &requiredTargetCount);
+    if (!part || !resolvedFrame)
+    {
+        return 0;
+    }
+
+    GetRequiredTargetsForSelector(part->kind, selector, &requiredTargets, &requiredTargetCount);
 
     EnterCriticalSection(&g_registryLock);
 
     for (index = 0; index < requiredTargetCount; ++index)
     {
         BatchTarget* mapping = FindBatchTarget(part->batch, requiredTargets[index]);
-        int32_t firstFrame;
-        int32_t lastFrame;
+        int64_t firstFrame;
+        int64_t lastFrame;
 
         if (!mapping || mapping->duplicate || mapping->appendedFrames < 1)
         {
@@ -1424,31 +1763,50 @@ static int ResolvePartFrame(const PartDefinition* part, int32_t* resolvedFrame)
             return 0;
         }
 
-        firstFrame = mapping->baseFrame + 1;
-        lastFrame = mapping->baseFrame + mapping->appendedFrames;
+        firstFrame = (int64_t)mapping->baseFrame + 1;
+        lastFrame = (int64_t)mapping->baseFrame + (int64_t)mapping->appendedFrames;
 
-        if (firstFrame > sharedFirstFrame)
+        if (firstFrame < 1 || lastFrame < firstFrame || lastFrame > INT32_MAX)
         {
-            sharedFirstFrame = firstFrame;
+            LeaveCriticalSection(&g_registryLock);
+            return 0;
         }
 
-        if (lastFrame < sharedLastFrame)
+        if ((int32_t)firstFrame > sharedFirstFrame)
         {
-            sharedLastFrame = lastFrame;
+            sharedFirstFrame = (int32_t)firstFrame;
+        }
+
+        if ((int32_t)lastFrame < sharedLastFrame)
+        {
+            sharedLastFrame = (int32_t)lastFrame;
         }
     }
 
     LeaveCriticalSection(&g_registryLock);
+
+    if (sharedFirstFrame > sharedLastFrame)
+    {
+        Log("@%s cannot resolve for %s: observed append ranges do not overlap (%d..%d)", part->id, selector ? selector : part->kind, sharedFirstFrame, sharedLastFrame);
+        return 0;
+    }
+
     resolved = (int64_t)sharedFirstFrame + (int64_t)part->logicalIndex - 1;
 
-    if (sharedFirstFrame > sharedLastFrame || resolved < sharedFirstFrame || resolved > sharedLastFrame || resolved > INT32_MAX)
+    if (part->logicalIndex < 1 || resolved < sharedFirstFrame || resolved > sharedLastFrame || resolved > INT32_MAX)
     {
-        Log("@%s logical index %d is outside the shared appended range %d..%d", part->id, part->logicalIndex, sharedFirstFrame, sharedLastFrame);
+        Log("@%s logical index %d is outside the observed %s append range %d..%d", part->id, part->logicalIndex, selector ? selector : part->kind, sharedFirstFrame, sharedLastFrame);
         return 0;
     }
 
     *resolvedFrame = (int32_t)resolved;
+    
     return 1;
+}
+
+static int ResolvePartFrame(const PartDefinition* part, int32_t* resolvedFrame)
+{
+    return ResolvePartFrameForSelector(part, NULL, resolvedFrame);
 }
 
 static int BindingWorkIsActive(void)
@@ -1456,11 +1814,15 @@ static int BindingWorkIsActive(void)
     return InterlockedCompareExchange(&g_activeAnimationMerges, 0, 0) != 0 || InterlockedCompareExchange(&g_activeAnnotatedAppends, 0, 0) != 0;
 }
 
-static int ResolvePartFrameAfterActiveBindings(const PartDefinition* part, int32_t* resolvedFrame)
+static int ResolvePartFrameAfterActiveBindingsForSelector(const PartDefinition* part, const char* selector, int32_t* resolvedFrame)
 {
     int32_t yields;
 
-    if (ResolvePartFrame(part, resolvedFrame))
+    /*
+    * Preserve the original named-ID contract: If the complete observed append
+    * ranges already exist, resolve them immediately...
+    */
+    if (ResolvePartFrameForSelector(part, selector, resolvedFrame))
     {
         return 1;
     }
@@ -1475,7 +1837,12 @@ static int ResolvePartFrameAfterActiveBindings(const PartDefinition* part, int32
         Sleep(0);
     }
 
-    return ResolvePartFrame(part, resolvedFrame);
+    return ResolvePartFrameForSelector(part, selector, resolvedFrame);
+}
+
+static int ResolvePartFrameAfterActiveBindings(const PartDefinition* part, int32_t* resolvedFrame)
+{
+    return ResolvePartFrameAfterActiveBindingsForSelector(part, NULL, resolvedFrame);
 }
 
 static int ReadNamedPartId(void* field, char* id, size_t idSize)
@@ -1499,6 +1866,7 @@ static int ReadNamedPartId(void* field, char* id, size_t idSize)
 
     memcpy(id, token + 1, tokenLength - 1U);
     id[tokenLength - 1U] = '\0';
+
     return IsValidId(id);
 }
 
@@ -1517,10 +1885,11 @@ static int ApplyResolvedPartFrame(void* field, int32_t frame)
     memcpy(bytes + GON_FLOAT_DATA_OFFSET, &frameAsDouble, sizeof(frameAsDouble));
     MemoryBarrier();
     memcpy(bytes + GON_TYPE_OFFSET, &fieldType, sizeof(fieldType));
+
     return 1;
 }
 
-static void QueuePendingNamedField(void* field, const char* id, const char* kind)
+static void QueuePendingNamedField(void* field, const char* id, const char* kind, const char* selector)
 {
     int32_t index;
     PendingNamedField* pending;
@@ -1535,6 +1904,7 @@ static void QueuePendingNamedField(void* field, const char* id, const char* kind
         {
             snprintf(pending->id, sizeof(pending->id), "%s", id);
             snprintf(pending->kind, sizeof(pending->kind), "%s", kind);
+            snprintf(pending->selector, sizeof(pending->selector), "%s", selector ? selector : kind);
             LeaveCriticalSection(&g_pendingFieldLock);
             return;
         }
@@ -1552,8 +1922,9 @@ static void QueuePendingNamedField(void* field, const char* id, const char* kind
     pending->field = field;
     snprintf(pending->id, sizeof(pending->id), "%s", id);
     snprintf(pending->kind, sizeof(pending->kind), "%s", kind);
+    snprintf(pending->selector, sizeof(pending->selector), "%s", selector ? selector : kind);
     LeaveCriticalSection(&g_pendingFieldLock);
-    Log("Deferred @%s until its %s append mappings are ready", id, kind);
+    Log("Deferred @%s until its %s append mappings are ready", id, selector ? selector : kind);
 }
 
 /*
@@ -1579,7 +1950,7 @@ static int RetryPendingNamedField(const PendingNamedField* pending)
         return -1;
     }
 
-    if (!ResolvePartFrame(part, &frame))
+    if (!ResolvePartFrameForSelector(part, pending->selector[0] ? pending->selector : NULL, &frame))
     {
         return 0;
     }
@@ -1662,6 +2033,37 @@ MewCatPartFramework_ResolvePart(const char* id, const char* expectedKind, int32_
     }
 
     return ResolvePartFrameAfterActiveBindings(part, resolvedFrame);
+}
+
+__declspec(dllexport) int __cdecl
+MewCatPartFramework_ResolvePartForField(const char* id, const char* expectedKind, const char* fieldName, int32_t* resolvedFrame)
+{
+    PartDefinition* part;
+
+    if (!id || !expectedKind || !fieldName || !resolvedFrame)
+    {
+        return 0;
+    }
+
+    if (*id == '@')
+    {
+        ++id;
+    }
+
+    if (!IsValidId(id))
+    {
+        return 0;
+    }
+
+    EnsureManifestsLoaded();
+    part = FindPart(id);
+
+    if (!part || strcmp(part->kind, expectedKind) != 0)
+    {
+        return 0;
+    }
+
+    return ResolvePartFrameAfterActiveBindingsForSelector(part, fieldName, resolvedFrame);
 }
 
 static TextureSyncCacheEntry* TextureSyncCacheSlot(int targetIndex, const void* definition)
@@ -1793,19 +2195,18 @@ MewCatPartFramework_SyncTextureClip(const char* partKind, void* textureMovieClip
         int32_t nextExpected;
 
         /*
-        * Do not cache this integer beside the source pointer. The observed
-        * merge-time count is useful for batch binding, but live replay can
-        * safely derive immutable source extent from the loaded SWF
-        * character itself. (This also avoids coupling replay state to the
-        * BatchTarget registry used by named-part resolution)...
+        * Keep the extent observed at the native merge boundary. The source
+        * MovieClip object remains usable by append_movie_clip later, but its
+        * wrapper fields are not a stable place to re-discover the original
+        * frame count after merge processing has completed...
         */
-        sourceFrames = MovieClipFrameCount(source->source);
+        sourceFrames = source->frameCount;
 
         if (!source->source || sourceFrames < 1 || expectedFrames > INT32_MAX - sourceFrames)
         {
             if (ShouldLogTextureSyncFailure(targetIndex))
             {
-                Log( "Cannot sync live %s tex timeline: texture append source %d is no longer readable", partKind, sourceIndex);
+                Log("Cannot sync live %s tex timeline: texture append source %d is no longer readable", partKind, sourceIndex);
             }
 
             LeaveCriticalSection(&g_textureAlignmentLock);
@@ -1839,6 +2240,7 @@ MewCatPartFramework_SyncTextureClip(const char* partKind, void* textureMovieClip
                 LeaveCriticalSection(&g_textureAlignmentLock);
                 return 0;
             }
+
             ++applied;
         }
         else if (currentFrames < nextExpected)
@@ -2003,7 +2405,7 @@ static void __fastcall HookCatPartGraphicsRefresh(void* graphics, void* partStat
     SyncPreparedCatPartGraphicsTexture(graphics, partState, catParts);
 }
 
-static void MaybeResolveNamedPart(void* field, const char* expectedKind)
+static void MaybeResolveNamedPart(void* field, const char* expectedKind, const char* selector)
 {
     char id[MAX_ID_LENGTH];
     int32_t frame;
@@ -2029,9 +2431,9 @@ static void MaybeResolveNamedPart(void* field, const char* expectedKind)
         return;
     }
 
-    if (!ResolvePartFrameAfterActiveBindings(part, &frame))
+    if (!ResolvePartFrameAfterActiveBindingsForSelector(part, selector, &frame))
     {
-        QueuePendingNamedField(field, id, expectedKind);
+        QueuePendingNamedField(field, id, expectedKind, selector);
         return;
     }
 
@@ -2087,17 +2489,18 @@ static void* __fastcall HookGonIndexByNameConst(void* gonObject, const void* fie
 {
     void* field = g_origGonIndexByNameConst ? g_origGonIndexByNameConst(gonObject, fieldName) : NULL;
     const char* kind;
+    const char* selector;
 
     if (!FieldLooksLikeNamedPartFast(field))
     {
         return field;
     }
 
-    kind = KindForGonField(fieldName);
+    kind = KindForGonField(fieldName, &selector);
 
     if (kind)
     {
-        MaybeResolveNamedPart(field, kind);
+        MaybeResolveNamedPart(field, kind, selector);
     }
 
     return field;
@@ -2107,17 +2510,18 @@ static void* __fastcall HookGonIndexByName(void* gonObject, const void* fieldNam
 {
     void* field = g_origGonIndexByName ? g_origGonIndexByName(gonObject, fieldName) : NULL;
     const char* kind;
+    const char* selector;
 
     if (!FieldLooksLikeNamedPartFast(field))
     {
         return field;
     }
 
-    kind = KindForGonField(fieldName);
+    kind = KindForGonField(fieldName, &selector);
 
     if (kind)
     {
-        MaybeResolveNamedPart(field, kind);
+        MaybeResolveNamedPart(field, kind, selector);
     }
 
     return field;
@@ -2130,13 +2534,6 @@ static int VerifyBytes(UINT_PTR base, UINT_PTR rva, const uint8_t* expected, siz
 
 static int InstallHooks(void)
 {
-    static const uint8_t processMergesBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x20 };
-    static const uint8_t findBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x08 };
-    static const uint8_t findCharacterBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x48, 0x83, 0xEC, 0x20 };
-    static const uint8_t appendBytes[] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10 };
-    static const uint8_t gonConstBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x08 };
-    static const uint8_t catPartGraphicsRefreshBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x48, 0x89, 0x4C, 0x24, 0x08 };
-    static const uint8_t setFrameBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10 };
     LONG state;
     UINT_PTR base;
     void* trampoline = NULL;

@@ -83,6 +83,13 @@ MewCatPartFramework_ResolvePart(
     int32_t* resolvedFrame);
 
 __declspec(dllexport) int __cdecl
+MewCatPartFramework_ResolvePartForField(
+    const char* id,
+    const char* expectedKind,
+    const char* fieldName,
+    int32_t* resolvedFrame);
+
+__declspec(dllexport) int __cdecl
 MewCatPartFramework_SyncTextureClip(
     const char* partKind,
     void* textureMovieClip);

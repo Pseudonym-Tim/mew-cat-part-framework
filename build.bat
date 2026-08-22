@@ -54,15 +54,34 @@ if not exist "src\MewCatPartFramework.c" (
     exit /b 1
 )
 
+if not exist "MewCatPartFramework.def" (
+    echo ERROR: MewCatPartFramework.def is missing.
+    pause
+    exit /b 1
+)
+
 if not exist build mkdir build
+
+REM Never let an old DLL make a failed build look successful.
+if exist "MewCatPartFramework.dll" del /q "MewCatPartFramework.dll"
+if exist "MewCatPartFramework.exp" del /q "MewCatPartFramework.exp"
+if exist "MewCatPartFramework.lib" del /q "MewCatPartFramework.lib"
 
 echo Building MewCatPartFramework.dll...
 
-"%CL_EXE%" /nologo /c /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Fo"build\MewCatPartFramework.obj" /Tc"%~dp0src\MewCatPartFramework.c"
+"%CL_EXE%" /nologo /c /O2 /W3 /MD /D_CRT_SECURE_NO_WARNINGS /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Fo"build\MewCatPartFramework.obj" /Tc"%~dp0src\MewCatPartFramework.c"
 if errorlevel 1 goto :failed
 
+"%LINK_EXE%" /nologo /DLL /MACHINE:X64 /INCREMENTAL:NO /OUT:"MewCatPartFramework.dll" /IMPLIB:"build\MewCatPartFramework.lib" /DEF:"MewCatPartFramework.def" "build\MewCatPartFramework.obj" kernel32.lib
+if errorlevel 1 goto :failed
+
+if not exist "MewCatPartFramework.dll" (
+    echo ERROR: Linker returned success, but MewCatPartFramework.dll was not created.
+    goto :failed
+)
+
 echo.
-echo Build succeeded.
+echo Build succeeded: "%CD%\MewCatPartFramework.dll"
 
 if /I "%MEWTATOR_DEPLOY%"=="true" (
     set "DEPLOY_DIR=%DESTINATION_DIR%"
@@ -71,14 +90,31 @@ if /I "%MEWTATOR_DEPLOY%"=="true" (
 )
 
 if not exist "%DEPLOY_DIR%" mkdir "%DEPLOY_DIR%"
+if errorlevel 1 goto :deploy_failed
 
 copy /Y "MewCatPartFramework.dll" "%DEPLOY_DIR%\MewCatPartFramework.dll" >nul
-if exist "description.json" copy /Y "description.json" "%DEPLOY_DIR%\description.json" >nul
-if exist "preview.png" copy /Y "preview.png" "%DEPLOY_DIR%\preview.png" >nul
+if errorlevel 1 goto :deploy_failed
+
+if exist "description.json" (
+    copy /Y "description.json" "%DEPLOY_DIR%\description.json" >nul
+    if errorlevel 1 goto :deploy_failed
+)
+
+if exist "preview.png" (
+    copy /Y "preview.png" "%DEPLOY_DIR%\preview.png" >nul
+    if errorlevel 1 goto :deploy_failed
+)
 
 echo Deployed to "%DEPLOY_DIR%"
 pause
 exit /b 0
+
+:deploy_failed
+echo.
+echo Build succeeded, but deployment FAILED.
+echo DLL remains at "%CD%\MewCatPartFramework.dll"
+pause
+exit /b 1
 
 :failed
 echo.
