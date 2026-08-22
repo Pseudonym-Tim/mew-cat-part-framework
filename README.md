@@ -5,9 +5,6 @@ A DLL dependency mod that allows other mods to add their own custom non-conflict
 
 > **Current support:** This framework currently only applies to **cat body parts and cat textures**. Other moddable content such as items is **not supported yet**, but support for additional content types is planned soon.
 
-> [!WARNING]
-> **Eye cat parts are currently broken and will cause the game to crash.** This is a known issue and will be fixed soon.
-
 # Making a Custom Cat Part Mod
 
 NOTE: A "cat_parts_test" FLA file demonstrating multiple cat part/texture additions is included in the root directory of this repo, feel free to download it and use it as an example!
