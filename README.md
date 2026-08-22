@@ -129,5 +129,4 @@ MyCustomCat {
 
 ## Other Notes
 
-Due to an accidental mismatch in the original cat assets, (at the time of writing at least), the **Head texture timeline is 1505 frames long**, while the other texture timelines are **1506 frames long**.
-MewCatPartFramework detects and corrects this mismatch automatically when custom textures are appended. **Do not add an empty padding frame yourself.** Manual padding will interfere with the framework's alignment handling.
+MewCatPartFramework detects and corrects any timeline frame mismatches automatically when custom textures are appended. **Do not add an empty padding frame yourself!** Manual padding will interfere with the framework's alignment handling.
