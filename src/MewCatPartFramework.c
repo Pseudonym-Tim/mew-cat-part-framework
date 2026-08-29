@@ -1231,12 +1231,56 @@ static BatchTarget* FindBatchTarget(const char* batch, const char* target)
     return NULL;
 }
 
+static void PersistBatchTargetRange(const char* batch, const char* target, int32_t baseFrame, int32_t appendedFrames)
+{
+    char modulePath[MAX_PATH_LENGTH];
+    char frameworkDirectory[MAX_PATH_LENGTH];
+    char registryPath[MAX_PATH_LENGTH];
+    FILE* registryFile;
+    long existingBytes;
+
+    if (!batch || !target || appendedFrames <= 0 || baseFrame < 0)
+    {
+        return;
+    }
+
+    if (!GetModuleFileNameA(g_moduleHandle, modulePath, (DWORD)sizeof(modulePath)))
+    {
+        return;
+    }
+
+    GetDirectoryFromPath(modulePath, frameworkDirectory, sizeof(frameworkDirectory));
+    snprintf(registryPath, sizeof(registryPath), "%s\\cat_part_ranges.tsv", frameworkDirectory);
+    registryFile = fopen(registryPath, "ab+");
+
+    if (!registryFile)
+    {
+        return;
+    }
+
+    if (fseek(registryFile, 0, SEEK_END) == 0)
+    {
+        existingBytes = ftell(registryFile);
+
+        if (existingBytes == 0)
+        {
+            fputs("# MewCatPartFramework custom append range registry v1\r\n", registryFile);
+            fputs("# magic\tbatch\ttarget\tfirstFrame\tlastFrame\r\n", registryFile);
+        }
+    }
+
+    fprintf(registryFile, "MCPF1\t%s\t%s\t%d\t%d\r\n", batch, target, baseFrame + 1, baseFrame + appendedFrames);
+    fflush(registryFile);
+    fclose(registryFile);
+}
+
 static void RecordBatchTarget(const char* batch, const char* target, int32_t baseFrame, int32_t appendedFrames, void* destination, void* source, void* paddingCharacter)
 {
     BatchTarget* existing;
     BatchTarget* added;
 
     EnterCriticalSection(&g_registryLock);
+    PersistBatchTargetRange(batch, target, baseFrame, appendedFrames);
     existing = FindBatchTarget(batch, target);
 
     if (existing)
