@@ -3,7 +3,7 @@ A DLL dependency mod that allows other mods to add their own custom non-conflict
 
 <img width="500" height="357" alt="preview" src="https://github.com/user-attachments/assets/1511dcbe-8579-4a46-b50e-7ecd4aa0dd45" />
 
-> **Current support:** This framework currently only applies to **cat body parts and cat textures**. Other moddable content such as items is **not supported yet**, but support for additional content types is planned soon. Additionally, at the time of writing, custom `CatHeadPlacements` support has not been added yet, but is coming soon!
+> **Current support:** This framework currently only applies to **cat body parts and cat textures**. Other moddable content such as items is **not supported yet**, but support for additional content types is planned. Additionally, at the time of writing, custom `CatHeadPlacements` support has not been added yet, but is coming soon!
 
 # Making a Custom Cat Part Mod
 
