@@ -3,7 +3,7 @@ A DLL dependency mod that allows other mods to add their own custom non-conflict
 
 <img width="500" height="357" alt="preview" src="https://github.com/user-attachments/assets/1511dcbe-8579-4a46-b50e-7ecd4aa0dd45" />
 
-> **Current support:** This framework currently only applies to **cat body parts and cat textures**. Other moddable content such as items is **not supported yet**, but support for additional content types is planned. Additionally, at the time of writing, custom `CatHeadPlacements` support has not been added yet, but is coming soon!
+> **Current support:** This framework currently only applies to **cat body parts and cat textures**. Other moddable content such as items is **not supported yet**, but support for additional content types is planned.
 
 # Making a Custom Cat Part Mod
 
@@ -86,7 +86,7 @@ Supported part targets are:
 | Kind      | Required SWF target(s)                                         |
 | --------- | -------------------------------------------------------------- |
 | `body`    | `CatBody`                                                      |
-| `head`    | `CatHead`                                                      |
+| `head`    | `CatHead` (optional: `CatHeadPlacements`) |
 | `leg`     | `CatLeg` (Used by both legs and arms)                          |
 | `tail`    | `CatTail`                                                      |
 | `ear`     | `CatEar`                                                       |
@@ -96,6 +96,19 @@ Supported part targets are:
 | `texture` | **(all five texture targets listed in the "Cat Textures" section of this tutorial)**                      |
 
 Kinds with multiple targets (like eyes or mouths) must append matching logical slots to every required target.
+
+### Cat Head Placements
+
+Custom heads can optionally provide matching `CatHeadPlacements` data for positioning of eye, ear, mouth, etc.
+
+`CatHeadPlacements` is **not registered in `cat_parts.txt`**. It is companion data for a custom `head`, but it should use the same append linkaging:
+
+```text
+_Append_CatHead__MCPF__myMod.catParts
+_Append_CatHeadPlacements__MCPF__myMod.catParts
+````
+
+The placement frames must use the same logical order as the corresponding `CatHead` frames.
 
 ## Cat Textures
 
