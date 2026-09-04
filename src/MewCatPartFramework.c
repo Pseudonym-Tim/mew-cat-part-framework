@@ -94,6 +94,8 @@ typedef struct
 
 static const char* const BODY_TARGETS[] = {"CatBody"};
 static const char* const HEAD_TARGETS[] = {"CatHead"};
+
+static const char* const HEAD_PLACEMENT_TARGETS[] = {"CatHead", "CatHeadPlacements"};
 static const char* const LEG_TARGETS[] = {"CatLeg"};
 static const char* const TAIL_TARGETS[] = {"CatTail"};
 static const char* const EAR_TARGETS[] = {"CatEar"};
@@ -1529,6 +1531,11 @@ static int AlignTargetGroupBeforeFirstBatchAppend(
 
 static int AlignNamedTargetBeforeAppend(void* application, const char* batch, const char* target, void* nativeDestination)
 {
+    if (_stricmp(target, "CatHead") == 0 || _stricmp(target, "CatHeadPlacements") == 0)
+    {
+        return AlignTargetGroupBeforeFirstBatchAppend(application, batch, HEAD_PLACEMENT_TARGETS, 2, "head placement", target, nativeDestination);
+    }
+
     if (_stricmp(target, "CatEye") == 0 || _stricmp(target, "CatEyeClosed") == 0)
     {
         return AlignTargetGroupBeforeFirstBatchAppend(application, batch, LEFT_EYE_TARGETS, 2, "left eye", target, nativeDestination);
