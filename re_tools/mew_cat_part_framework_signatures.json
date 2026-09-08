@@ -1,0 +1,60 @@
+{
+  "symbols": {
+    "RVA_PROCESS_ANIMATION_MERGES": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 20 48 89 54 24 10 48 89 4C 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 F0 48 81 EC 10 01 00 00 4C 8B EA 45 33 FF 48 8B 7A 78 48 8B 1F 48 3B DF 0F 84 93 05 00 00 49 BA FF FF FF FF FF FF FF 7F 41 BB 16 00 00 00 48 B8 5F 41 70 70 65 6E 64 5F"
+    },
+    "RVA_FIND_SWF_EXPORT": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 48 89 54 24 10 57 41 54 41 55 41 56 41 57 48 83 EC 40 48 8B F2 4C 8B E9 4C 8D B9 B8 02 00 00 4C 8B 42 10 48 83 7A 18 0F 76 03 48 8B 12 48 BF 25 23 22 84 E4 9C F2 CB 4C 8B CF 33 DB 8B CB 49 BC B3 01 00 00 00 01 00 00"
+    },
+    "RVA_APPEND_MOVIE_CLIP": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 8B C4 48 89 58 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC E0 00 00 00 0F 29 70 B8 0F 29 78 A8 44 0F 29 40 98 44 0F 29 48 88 4C 8B F2 4C 8B E9 48 83 B9 30 01 00 00 00 0F 85 58 01 00 00"
+    },
+    "RVA_FIND_SWF_CHARACTER": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 10 56 48 83 EC 20 48 8B 41 28 48 63 D2 48 8B 1C D0 48 8D 34 D0 0F B6 43 20 90 84 C0 75 41"
+    },
+    "RVA_GON_INDEX_BY_NAME_CONST": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 48 8B F1 48 8B DA 48 8D 0D ?? ?? ?? ?? 48 3B CA 74 13 48 83 7A 18 0F 76 03 48 8B 12 4C 8B 43 10 E8 ?? ?? ?? ?? 83 BE A8 00 00 00 03 0F 85 A1 00 00 00 48 83 7B 18 0F 4C 8B C3 76 03 4C 8B 03 4C 8B 4B 10 33 C0 48 BA 25 23 22 84 E4 9C F2 CB"
+    },
+    "RVA_GON_INDEX_BY_NAME": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 48 8B F1 48 8B DA 48 8D 0D ?? ?? ?? ?? 48 3B CA 74 13 48 83 7A 18 0F 76 03 48 8B 12 4C 8B 43 10 E8 ?? ?? ?? ?? 83 BE A8 00 00 00 03 0F 85 96 00 00 00 48 83 7B 18 0F 4C 8B C3 76 03 4C 8B 03 4C 8B 4B 10 33 C9 48 BA 25 23 22 84 E4 9C F2 CB"
+    },
+    "RVA_CAT_PART_GRAPHICS_REFRESH": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 48 89 4C 24 08 55 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 70 45 8B E1 4D 8B E8 48 8B F2 4C 8B F9 48 8B 59 10 8B 41 0C 4C 8D 34 40 49 C1 E6 04 4C 03 F3 49 3B DE 0F 84 C9 02 00 00 41 BF 20 00 00 00 48 8B 3B 48 85 FF 0F 84 A6 02 00 00"
+    },
+    "RVA_MOVIE_CLIP_SET_FRAME": {
+      "resolver": "pattern_start_rva",
+      "search_sections": [
+        ".text"
+      ],
+      "pattern": "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 81 D0 00 00 00 33 F6 85 D2 44 8B C6 48 8B F9 44 0F 49 C2 8B 18 FF CB 44 3B C3 41 0F 4E D8 39 99 D8 00 00 00 75 2A F2 0F 10 41 30 0F 57 C9 66 0F 2E C1 48 89 71 30 0F 84 03 01 00 00"
+    }
+  }
+}

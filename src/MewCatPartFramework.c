@@ -155,6 +155,7 @@ static __declspec(thread) int32_t g_insideBindingWork;
 
 static void RetryPendingNamedFields(void);
 static int SwfFindExportCharacterId(void* swf, const char* exportName, int32_t* characterId);
+static void* FindPaddingCharacterInSwf(void* swf, void* movieClipPrototype, int32_t* foundCharacterId);
 
 static void Log(const char* format, ...)
 {
@@ -1055,12 +1056,20 @@ static int EnsureBaseTextureTimelinesAligned(void* swf)
         }
     }
 
-    filler = g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, CAT_TEXTURE_PADDING_CHARACTER_ID);
-    
-    if (!filler || MovieClipFrameCount(filler) != 1)
     {
-        Log("Cannot initialize texture appends: empty padding character %d is invalid", CAT_TEXTURE_PADDING_CHARACTER_ID);
-        goto done;
+        int32_t fillerCharacterId = -1;
+        filler = FindPaddingCharacterInSwf(swf, textures[0], &fillerCharacterId);
+
+        if (!filler)
+        {
+            Log("Cannot initialize texture appends: no compatible one-frame MovieClip filler was found");
+            goto done;
+        }
+
+        if (fillerCharacterId != CAT_TEXTURE_PADDING_CHARACTER_ID)
+        {
+            Log("Texture alignment: padding character %d is unavailable, discovered compatible one-frame character %d", CAT_TEXTURE_PADDING_CHARACTER_ID, fillerCharacterId);
+        }
     }
 
     g_texturePaddingCharacter = filler;
@@ -1383,23 +1392,74 @@ static void* FindExportInSwf(void* swf, const char* exportName)
     return g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, characterId);
 }
 
-static void* FindPaddingCharacterInSwf(void* swf)
+static int MovieClipDefinitionTypeMatches(void* left, void* right)
+{
+    void* leftType;
+    void* rightType;
+
+    if (!left || !right || !IsMemoryRangeAccessible(left, sizeof(leftType), 0) || !IsMemoryRangeAccessible(right, sizeof(rightType), 0))
+    {
+        return 0;
+    }
+
+    memcpy(&leftType, left, sizeof(leftType));
+    memcpy(&rightType, right, sizeof(rightType));
+    return leftType != NULL && leftType == rightType;
+}
+
+static void* FindPaddingCharacterInSwf(void* swf, void* movieClipPrototype, int32_t* foundCharacterId)
 {
     void* filler;
+    int32_t characterId;
 
-    if (!swf || !g_findSwfCharacter)
+    if (foundCharacterId)
+    {
+        *foundCharacterId = -1;
+    }
+
+    if (!swf || !movieClipPrototype || !g_findSwfCharacter)
     {
         return NULL;
     }
 
     filler = g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, CAT_TEXTURE_PADDING_CHARACTER_ID);
 
-    if (!filler || MovieClipFrameCount(filler) != 1)
+    if (filler && filler != movieClipPrototype && MovieClipFrameCount(filler) == 1 && MovieClipDefinitionTypeMatches(filler, movieClipPrototype))
     {
-        return NULL;
+        if (foundCharacterId)
+        {
+            *foundCharacterId = CAT_TEXTURE_PADDING_CHARACTER_ID;
+        }
+
+        return filler;
     }
 
-    return filler;
+    for (characterId = 1; characterId <= 32768; ++characterId)
+    {
+        if (characterId == CAT_TEXTURE_PADDING_CHARACTER_ID)
+        {
+            continue;
+        }
+
+        filler = g_findSwfCharacter((uint8_t*)swf + SWF_CHARACTER_TABLE_OFFSET, characterId);
+
+        if (!filler || filler == movieClipPrototype)
+        {
+            continue;
+        }
+
+        if (MovieClipFrameCount(filler) == 1 && MovieClipDefinitionTypeMatches(filler, movieClipPrototype))
+        {
+            if (foundCharacterId)
+            {
+                *foundCharacterId = characterId;
+            }
+
+            return filler;
+        }
+    }
+
+    return NULL;
 }
 
 static int BatchAlreadyHasAnyTarget(const char* batch, const char* const* targets, int32_t targetCount)
@@ -1503,12 +1563,18 @@ static int AlignTargetGroupBeforeFirstBatchAppend(
 
         if (!filler)
         {
-            filler = FindPaddingCharacterInSwf(ownerSwf);
+            int32_t fillerCharacterId = -1;
+            filler = FindPaddingCharacterInSwf(ownerSwf, destinations[index], &fillerCharacterId);
 
             if (!filler)
             {
-                Log("Cannot pre-align batch %s / %s: owner SWF has no safe one-frame filler character %d", batch, groupName, CAT_TEXTURE_PADDING_CHARACTER_ID);
+                Log("Cannot pre-align batch %s / %s: owner SWF has no compatible one-frame MovieClip filler", batch, groupName);
                 return 0;
+            }
+
+            if (fillerCharacterId != CAT_TEXTURE_PADDING_CHARACTER_ID)
+            {
+                Log("Pre-align batch %s / %s: padding character %d is unavailable, discovered compatible one-frame character %d", batch, groupName, CAT_TEXTURE_PADDING_CHARACTER_ID, fillerCharacterId);
             }
         }
 
