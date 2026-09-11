@@ -25,6 +25,7 @@ typedef struct
     char sourcePath[MAX_PATH_LENGTH];
     int32_t logicalIndex;
     int32_t duplicate;
+    int32_t isItem;
 } PartDefinition;
 
 typedef struct
@@ -37,6 +38,7 @@ typedef struct
     int32_t duplicate;
     int32_t committed;
     int32_t alignmentState;
+    int32_t isItem; 
     void* destination;
     void* source;
     void* paddingCharacter;
@@ -47,6 +49,7 @@ typedef struct
     int active;
     int recordBatch;
     int textureTargetIndex;
+    int isItem;
     void* destination;
     void* paddingCharacter;
     char batch[MAX_ID_LENGTH];
@@ -111,6 +114,41 @@ static const char* const TEXTURE_TARGETS[] = {
     "CatTailTexture",
     "CatEarTexture"
 };
+static const char* const WEAPON_TARGETS[4]      = {"Weapon",    "WeaponIcon",    "WeaponIcon_Worn",    "WeaponIcon_Broken"};
+static const char* const TRINKET_TARGETS[4]     = {"Trinket",   "TrinketIcon",   "TrinketIcon_Worn",   "TrinketIcon_Broken"};
+static const char* const NECK_ITEM_TARGETS[5]   = {"NeckItemF", "NeckItemB",     "NeckItemIcon",       "NeckItemIcon_Worn",  "NeckItemIcon_Broken"};
+static const char* const HEAD_ITEM_TARGETS[5]   = {"HeadItemF", "HeadItemB",     "HeadItemIcon",       "HeadItemIcon_Worn",  "HeadItemIcon_Broken"};
+static const char* const FACE_ITEM_TARGETS[5]   = {"FaceItemF", "FaceItemB",     "FaceItemIcon",       "FaceItemIcon_Worn",  "FaceItemIcon_Broken"};
+
+static const char* KindForItemTarget(const char* target)
+{
+    int32_t i;
+    if (!target) return NULL;
+    for (i = 0; i < 4; ++i)
+    {
+        if (_stricmp(target, WEAPON_TARGETS[i])  == 0) return "weapon";
+        if (_stricmp(target, TRINKET_TARGETS[i]) == 0) return "trinket";
+    }
+    for (i = 0; i < 5; ++i)
+    {
+        if (_stricmp(target, NECK_ITEM_TARGETS[i]) == 0) return "neckItem";
+        if (_stricmp(target, HEAD_ITEM_TARGETS[i]) == 0) return "headItem";
+        if (_stricmp(target, FACE_ITEM_TARGETS[i]) == 0) return "faceItem";
+    }
+    return NULL;
+}
+
+static void GetRequiredItemTargets(const char* kind, const char* const** targets, int32_t* targetCount)
+{
+    if (!kind || !targets || !targetCount) return;
+    if (strcmp(kind, "weapon")   == 0) { *targets = WEAPON_TARGETS;    *targetCount = 4; return; }
+    if (strcmp(kind, "trinket")  == 0) { *targets = TRINKET_TARGETS;   *targetCount = 4; return; }
+    if (strcmp(kind, "neckItem") == 0) { *targets = NECK_ITEM_TARGETS; *targetCount = 5; return; }
+    if (strcmp(kind, "headItem") == 0) { *targets = HEAD_ITEM_TARGETS; *targetCount = 5; return; }
+    if (strcmp(kind, "faceItem") == 0) { *targets = FACE_ITEM_TARGETS; *targetCount = 5; return; }
+    *targets = NULL; *targetCount = 0;
+}
+
 
 static const TextureTargetDefinition TEXTURE_TARGET_DEFINITIONS[] = {
     {"CatBodyTexture", "CatBodyTex", "CatBody", 8845, 8053, 1506},
@@ -376,7 +414,11 @@ static const char* CanonicalKind(const char* kind)
     if (_stricmp(kind, "eyebrow") == 0 || _stricmp(kind, "eyebrows") == 0 || _stricmp(kind, "brow") == 0 || _stricmp(kind, "brows") == 0) return "eyebrow";
     if (_stricmp(kind, "mouth") == 0 || _stricmp(kind, "mouths") == 0) return "mouth";
     if (_stricmp(kind, "texture") == 0 || _stricmp(kind, "textures") == 0) return "texture";
-    
+    if (_stricmp(kind, "weapon")   == 0) return "weapon";
+    if (_stricmp(kind, "trinket")  == 0) return "trinket";
+    if (_stricmp(kind, "neckitem") == 0) return "neckItem";
+    if (_stricmp(kind, "headitem") == 0) return "headItem";
+    if (_stricmp(kind, "faceitem") == 0) return "faceItem";
     return NULL;
 }
 
@@ -427,6 +469,7 @@ static const char* KindForGonField(const void* fieldName, const char** selector)
     MATCH_GON_FIELD("rightear", "ear");
     MATCH_GON_FIELD("mouth", "mouth");
     MATCH_GON_FIELD("texture", "texture");
+    MATCH_GON_FIELD("frame", "item");
 
 #undef MATCH_GON_FIELD
 
@@ -546,6 +589,7 @@ static int ParseManifestLine(char* line, const char* sourcePath, int32_t lineNum
     }
 
     snprintf(part.kind, sizeof(part.kind), "%s", canonicalKind);
+    part.isItem = (strcmp(canonicalKind, "weapon") == 0 || strcmp(canonicalKind, "trinket") == 0 || strcmp(canonicalKind, "neckItem") == 0 || strcmp(canonicalKind, "headItem") == 0 || strcmp(canonicalKind, "faceItem") == 0);
     token = strtok_s(NULL, " \t,", &context);
 
     if (!token || !IsValidId(token) || strlen(token) >= sizeof(part.batch))
@@ -778,10 +822,11 @@ static void EnsureManifestsLoaded(void)
 
 static int ParseAnnotatedExport(const void* nameObject, char* target, size_t targetSize, char* batch, size_t batchSize)
 {
-    static const char marker[] = "__MCPF__";
-    const size_t markerLength = sizeof(marker) - 1U;
+    static const char marker_mcpf[] = "__MCPF__";
+    static const char marker_mif[]  = "__MIF__";
     const char* text;
     const char* markerAt = NULL;
+    size_t markerLength = 0;
     size_t index;
     size_t length;
     size_t targetLength;
@@ -792,17 +837,34 @@ static int ParseAnnotatedExport(const void* nameObject, char* target, size_t tar
         return 0;
     }
 
-    if (length < markerLength)
+    /* Check __MIF__ first so item exports take priority over any ambiguous overlap */
+    markerLength = sizeof(marker_mif) - 1U;
+    if (length >= markerLength)
     {
-        return 0;
+        for (index = 0; index + markerLength <= length; ++index)
+        {
+            if (memcmp(text + index, marker_mif, markerLength) == 0)
+            {
+                markerAt = text + index;
+                break;
+            }
+        }
     }
 
-    for (index = 0; index + markerLength <= length; ++index)
+    /* Fall back to __MCPF__ */
+    if (!markerAt)
     {
-        if (memcmp(text + index, marker, markerLength) == 0)
+        markerLength = sizeof(marker_mcpf) - 1U;
+        if (length >= markerLength)
         {
-            markerAt = text + index;
-            break;
+            for (index = 0; index + markerLength <= length; ++index)
+            {
+                if (memcmp(text + index, marker_mcpf, markerLength) == 0)
+                {
+                    markerAt = text + index;
+                    break;
+                }
+            }
         }
     }
 
@@ -1261,7 +1323,8 @@ static void PersistBatchTargetRange(const char* batch, const char* target, int32
     }
 
     GetDirectoryFromPath(modulePath, frameworkDirectory, sizeof(frameworkDirectory));
-    snprintf(registryPath, sizeof(registryPath), "%s\\cat_part_ranges.tsv", frameworkDirectory);
+    snprintf(registryPath, sizeof(registryPath), "%s\\%s", frameworkDirectory,
+        KindForItemTarget(target) ? "item_frame_ranges.tsv" : "cat_part_ranges.tsv");
     registryFile = fopen(registryPath, "ab+");
 
     if (!registryFile)
@@ -1275,12 +1338,16 @@ static void PersistBatchTargetRange(const char* batch, const char* target, int32
 
         if (existingBytes == 0)
         {
-            fputs("# MewCatPartFramework custom append range registry v1\r\n", registryFile);
+            fputs(KindForItemTarget(target)
+                ? "# MewCatPartFramework custom item append range registry v1\r\n"
+                : "# MewCatPartFramework custom append range registry v1\r\n", registryFile);
             fputs("# magic\tbatch\ttarget\tfirstFrame\tlastFrame\r\n", registryFile);
         }
     }
 
-    fprintf(registryFile, "MCPF1\t%s\t%s\t%d\t%d\r\n", batch, target, baseFrame + 1, baseFrame + appendedFrames);
+    fprintf(registryFile, "%s\t%s\t%s\t%d\t%d\r\n",
+        KindForItemTarget(target) ? "MIF1" : "MCPF1",
+        batch, target, baseFrame + 1, baseFrame + appendedFrames);
     fflush(registryFile);
     fclose(registryFile);
 }
@@ -1597,6 +1664,19 @@ static int AlignTargetGroupBeforeFirstBatchAppend(
 
 static int AlignNamedTargetBeforeAppend(void* application, const char* batch, const char* target, void* nativeDestination)
 {
+    const char* itemKind = KindForItemTarget(target);
+
+    if (itemKind)
+    {
+        const char* const* targets = NULL;
+        int32_t count = 0;
+        GetRequiredItemTargets(itemKind, &targets, &count);
+        if (targets && count >= 2)
+        {
+            return AlignTargetGroupBeforeFirstBatchAppend(application, batch, targets, count, itemKind, target, nativeDestination);
+        }
+    }
+
     if (_stricmp(target, "CatHead") == 0 || _stricmp(target, "CatHeadPlacements") == 0)
     {
         return AlignTargetGroupBeforeFirstBatchAppend(application, batch, HEAD_PLACEMENT_TARGETS, 2, "head placement", target, nativeDestination);
@@ -1864,7 +1944,14 @@ static int ResolvePartFrameForSelector(const PartDefinition* part, const char* s
         return 0;
     }
 
-    GetRequiredTargetsForSelector(part->kind, selector, &requiredTargets, &requiredTargetCount);
+    if (part->isItem)
+    {
+        GetRequiredItemTargets(part->kind, &requiredTargets, &requiredTargetCount);
+    }
+    else
+    {
+        GetRequiredTargetsForSelector(part->kind, selector, &requiredTargets, &requiredTargetCount);
+    }
 
     EnterCriticalSection(&g_registryLock);
 
@@ -2067,9 +2154,19 @@ static int RetryPendingNamedField(const PendingNamedField* pending)
         return -1;
     }
 
-    if (!ResolvePartFrameForSelector(part, pending->selector[0] ? pending->selector : NULL, &frame))
+    if (part->isItem)
     {
-        return 0;
+        if (!ResolvePartFrame(part, &frame))
+        {
+            return 0;
+        }
+    }
+    else
+    {
+        if (!ResolvePartFrameForSelector(part, pending->selector[0] ? pending->selector : NULL, &frame))
+        {
+            return 0;
+        }
     }
 
     if (!ApplyResolvedPartFrame(pending->field, frame))
@@ -2542,16 +2639,27 @@ static void MaybeResolveNamedPart(void* field, const char* expectedKind, const c
         return;
     }
 
-    if (strcmp(part->kind, expectedKind) != 0)
+    if (part->isItem)
     {
-        Log("@%s is a %s part, not valid for this %s field", id, part->kind, expectedKind);
-        return;
+        if (!ResolvePartFrameAfterActiveBindings(part, &frame))
+        {
+            QueuePendingNamedField(field, id, part->kind, NULL);
+            return;
+        }
     }
-
-    if (!ResolvePartFrameAfterActiveBindingsForSelector(part, selector, &frame))
+    else
     {
-        QueuePendingNamedField(field, id, expectedKind, selector);
-        return;
+        if (strcmp(part->kind, expectedKind) != 0)
+        {
+            Log("@%s is a %s part, not valid for this %s field", id, part->kind, expectedKind);
+            return;
+        }
+
+        if (!ResolvePartFrameAfterActiveBindingsForSelector(part, selector, &frame))
+        {
+            QueuePendingNamedField(field, id, expectedKind, selector);
+            return;
+        }
     }
 
     if (ApplyResolvedPartFrame(field, frame))
