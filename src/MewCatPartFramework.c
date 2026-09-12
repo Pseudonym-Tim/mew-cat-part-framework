@@ -2325,7 +2325,7 @@ static void RememberTextureSyncCache(int targetIndex, void* definition, int32_t 
     MemoryBarrier();
 }
 
-__declspec(dllexport) int __cdecl
+__declspec(dllexport) __declspec(noinline) int __cdecl
 MewCatPartFramework_SyncTextureClip(const char* partKind, void* textureMovieClip)
 {
     uint8_t* liveClip = (uint8_t*)textureMovieClip;
@@ -2336,13 +2336,16 @@ MewCatPartFramework_SyncTextureClip(const char* partKind, void* textureMovieClip
     int32_t sourceCount;
     int32_t sourceIndex;
     int32_t applied = 0;
+    TextureAppendSource* sourcesForTarget;
 
     targetIndex = TextureTargetIndexForPartKind(partKind);
 
-    if (targetIndex < 0 || !textureMovieClip || !g_origAppendMovieClip || !IsMemoryRangeAccessible(liveClip, LIVE_MOVIE_CLIP_DEFINITION_OFFSET + sizeof(definitionData), 0))
+    if (targetIndex < 0 || targetIndex >= 5 || !textureMovieClip || !g_origAppendMovieClip || !IsMemoryRangeAccessible(liveClip, LIVE_MOVIE_CLIP_DEFINITION_OFFSET + sizeof(definitionData), 0))
     {
         return 0;
     }
+
+    sourcesForTarget = g_textureAppendSources[targetIndex];
 
     /* 
     * Validate the live instance once, then let already-validated persistent
@@ -2404,7 +2407,7 @@ MewCatPartFramework_SyncTextureClip(const char* partKind, void* textureMovieClip
 
     for (sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex)
     {
-        TextureAppendSource* source = &g_textureAppendSources[targetIndex][sourceIndex];
+        TextureAppendSource* source = &sourcesForTarget[sourceIndex];
         int32_t sourceFrames;
         int32_t nextExpected;
 
@@ -2536,7 +2539,7 @@ static const char* TextureKindForPartState(void* partState, void* catParts)
     }
 }
 
-static void SyncPreparedCatPartGraphicsTexture(void* graphics, void* partState, void* catParts)
+static __declspec(noinline) void SyncPreparedCatPartGraphicsTexture(void* graphics, void* partState, void* catParts)
 {
     const char* kind;
     uint8_t* entries;
