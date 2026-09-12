@@ -177,3 +177,7 @@ A tool for uninstalling custom cat parts from your save files has been included!
 ## Other Notes
 
 MewCatPartFramework detects and corrects any timeline frame mismatches automatically when custom textures are appended. **Do not add an empty padding frame yourself!** Manual padding will interfere with the framework's alignment handling.
+
+## Credits
+
+Special thanks to **Zyrus** from the [Mewgenics Modding Discord](https://discord.gg/6utN4YAktp) for adding **item support**!
