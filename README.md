@@ -174,9 +174,11 @@ MyCustomHat {
 ## Uninstaller
 A tool for uninstalling custom cat parts from your save files has been included!
 
-## Other Notes
+## Other Notes/Warnings
 
-MewCatPartFramework detects and corrects any timeline frame mismatches automatically when custom textures are appended. **Do not add an empty padding frame yourself!** Manual padding will interfere with the framework's alignment handling.
+MewCatPartFramework detects and corrects any timeline frame mismatches automatically when custom textures are appended. **Do NOT add any empty padding frames yourself!** Manual padding will interfere with the framework's alignment handling!
+
+Custom cat parts and items will render cats in your save broken when you decide to uninstall a related cat part mod. This may even cause crashes! A tool has been provided to uninstall/fix your save, but you should still nonetheless make a manual backup yourself. You've been warned.
 
 ## Credits
 
