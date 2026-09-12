@@ -131,7 +131,7 @@ _Append_CatHeadPlacements__MCPF__myMod.catParts
 
 The placement frames must use the same logical order as the corresponding `CatHead` frames.
 
-## Cat Textures
+### Cat Textures
 
 Cat textures require a **complete set of five ActionScript linkages**, even if your texture is only intended to visibly affect one particular body part:
 
