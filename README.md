@@ -12,10 +12,13 @@ NOTE: Example FLA files are included in the root directory of this repo:
 * `item_parts_test.fla`: Demonstrates weapon, trinket, and equipment item additions.
 
 Feel free to download them and use them as examples!
+> Please note that at the time of writing, these examples are incomplete and basic! 
+<br>Eventually, proper templates that explore everything will be provided however.
 
 To make a cat part mod, install [**MewCatPartFramework**](https://www.nexusmods.com/mewgenics/mods/489), then create your own mod folder next to it.
 
-First, make sure your `description.json` lists the framework as a dependency so players know to install it:
+First and most importantly, create your description.json file, just as Mewtator expects. 
+<br>Then, make sure your `description.json` lists the framework as a dependency so players know to install it:
 
 ```text
 "requirements": [
@@ -24,7 +27,7 @@ First, make sure your `description.json` lists the framework as a dependency so 
 ```
 
 Your mod should look something like this:
-
+<br>*(Shown alongside framework mod for reference)*
 ```text
 mods/
   MewCatPartFramework/
