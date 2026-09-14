@@ -39,6 +39,8 @@ mods/
       swflist.gon.append
 ```
 
+> **IMPORTANT:** The registration file must be named exactly `cat_parts.txt`. The framework looks for this specific filename, renaming it will prevent your custom parts from being registered!
+
 Load your SWF from `swfs/swflist.gon.append`:
 
 ```text
@@ -177,6 +179,8 @@ A tool for uninstalling custom cat parts from your save files has been included!
 ## Other Notes/Warnings
 
 MewCatPartFramework detects and corrects any timeline frame mismatches automatically when custom textures are appended. **Do NOT add any empty padding frames yourself!** Manual padding will interfere with the framework's alignment handling!
+
+The part registration file for your mod must be named exactly `cat_parts.txt`. The framework looks for this specific filename, renaming it will prevent your custom parts from being registered!
 
 Custom cat parts and items will render cats in your save broken when you decide to uninstall a related cat part mod. This may even cause crashes! A tool has been provided to uninstall/fix your save, but you should still nonetheless make a manual backup yourself. You've been warned.
 
